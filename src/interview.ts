@@ -8,19 +8,28 @@ import {
 } from "./types";
 
 export class Interview extends DurableObject<CloudflareBindings> {
-  private session: Map<WebSocket, { interviewId: string }>;
+  private sessions: Map<WebSocket, { interviewId: string }>;
   private readonly db: InterviewDatabaseService;
 
   constructor(state: DurableObjectState, env: CloudflareBindings) {
     super(state, env);
 
-    this.session = new Map();
+    this.sessions = new Map();
     this.db = new InterviewDatabaseService(state.storage.sql);
     this.db.createTables();
+
+    this.ctx.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair("player-clears-puck", "icing-again")
+    );
   }
 
   async fetch(request: Request) {
-    return new Response("Interview object working");
+    const upgradeHeader = request.headers.get("Upgrade");
+    if (upgradeHeader?.toLocaleLowerCase().includes("websocket")) {
+      return this.handleWebSocketUpdate(request);
+    }
+
+    return new Response("Not Found", { status: 404 });
   }
 
   createInterview(title: InterviewTitle, skills: InterviewSkill[]): string {
@@ -52,6 +61,48 @@ export class Interview extends DurableObject<CloudflareBindings> {
     );
 
     return newMessage;
+  }
+
+  private async handleWebSocketUpdate(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const interviewId = url.pathname.split("/").pop();
+
+    if (!interviewId) {
+      return new Response("Interview ID is required", { status: 400 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+
+    this.sessions.set(server, { interviewId });
+
+    this.ctx.acceptWebSocket(server);
+
+    const interviewData = await this.db.getInterview(interviewId);
+    if (interviewData) {
+      server.send(
+        JSON.stringify({
+          type: "interview_details",
+          data: interviewData,
+        })
+      );
+    }
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    });
+  }
+
+  async webSocketClose(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean
+  ) {
+    console.log(
+      `Websocket closed: Code: ${code}, Reason: ${reason}, Clean: ${wasClean}`
+    );
   }
 
   private broadcast(message: string) {

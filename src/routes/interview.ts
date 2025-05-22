@@ -45,10 +45,16 @@ async function createInterview(ctx: HonoCtx) {
   return ctx.json({ success: true, interviewId });
 }
 
+async function streamInterviewProcess(ctx: HonoCtx) {
+  const interviewDO = getInterviewDO(ctx);
+  return await interviewDO.fetch(ctx.req.raw);
+}
+
 export function configureInterviewRoutes() {
   const router = new Hono<ApiContext>();
   router.use("*", requireAuth);
   router.get("/", getAllInterviews);
   router.post("/", createInterview);
+  router.get("/:interviewId", streamInterviewProcess);
   return router;
 }
